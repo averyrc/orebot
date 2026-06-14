@@ -217,16 +217,23 @@ def run_cycle(conn):
 def main():
     once = "--once" in sys.argv
     print(f"Poller started ({'single cycle' if once else 'loop'}).", flush=True)
+    failed = False
     while True:
         try:
             conn = psycopg2.connect(**DB)
             run_cycle(conn)
             conn.close()
+            failed = False
         except Exception as e:
             print("ERROR:", repr(e), flush=True)
+            failed = True
         if once:
             break
         time.sleep(INTERVAL_MIN * 60)
+    # In --once mode (CI/cron) surface failure as a non-zero exit so the run goes
+    # red; the long-running loop deliberately keeps going on transient errors.
+    if once and failed:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
