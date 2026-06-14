@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS fill_event (
     observed_at  TIMESTAMPTZ NOT NULL,
     signal_type  TEXT,        -- 'sold_out' | 'qty_drop' | 'expired'
     confidence   TEXT,        -- 'high' | 'medium' | 'low'
+    date_added   TIMESTAMPTZ, -- listing creation time (kept forever -> time-to-sell)
     UNIQUE(listing_id, observed_at, signal_type)
 );
 CREATE INDEX IF NOT EXISTS idx_fill_item ON fill_event(id_item, observed_at);
@@ -97,6 +98,7 @@ CREATE TABLE IF NOT EXISTS listing_state (
     last_is_sold_out  BOOLEAN,
     last_negotiations INTEGER,
     last_views        INTEGER,
+    date_added        TIMESTAMPTZ,             -- UEX listing creation time (for age)
     first_seen_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_seen_at      TIMESTAMPTZ NOT NULL,
     last_seen_run     BIGINT NOT NULL
@@ -133,6 +135,18 @@ if __name__ == "__main__":
     conn.autocommit = True
     cur = conn.cursor()
     cur.execute(SCHEMA)
+
+    # Idempotent migrations for already-existing tables (CREATE IF NOT EXISTS
+    # above won't add columns to a table that already exists).
+    cur.execute("ALTER TABLE listing_state ADD COLUMN IF NOT EXISTS date_added TIMESTAMPTZ")
+    cur.execute("ALTER TABLE fill_event    ADD COLUMN IF NOT EXISTS date_added TIMESTAMPTZ")
+    # Backfill date_added on any existing fills from snapshots (while they still exist).
+    cur.execute("""
+        UPDATE fill_event fe SET date_added = (
+            SELECT min(s.date_added) FROM listing_snapshot s WHERE s.listing_id = fe.listing_id)
+        WHERE fe.date_added IS NULL
+    """)
+
     cur.execute("""
         SELECT table_name FROM information_schema.tables
         WHERE table_schema='public' AND table_name IN

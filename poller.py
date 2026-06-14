@@ -154,6 +154,7 @@ def run_cycle(conn):
         lid = l["id"]; seen.add(lid)
         stock = l.get("in_stock"); sold = bool(l.get("is_sold_out")); price = l.get("price")
         qual = l.get("quality"); neg = l.get("total_negotiations"); views = l.get("total_views")
+        dadd = parse_ts(l.get("date_added"))
 
         p = prev.get(lid)
         changed = (p is None or p["stock"] != stock or p["sold"] != sold
@@ -161,29 +162,29 @@ def run_cycle(conn):
         if changed:
             snap_rows.append((now, lid, item, l.get("operation"), l.get("title"),
                 qual, price, l.get("currency"), stock, sold, neg, views,
-                parse_ts(l.get("date_added")), parse_ts(l.get("date_expiration"))))
+                dadd, parse_ts(l.get("date_expiration"))))
 
         # Fill detection only against a *continuous* observation (live last run).
         if p is not None and p["last_run"] == prev_run_id:
             if sold and not p["sold"]:
-                fill_rows.append((lid, item, qual, price, p["stock"], now, "sold_out", "high"))
+                fill_rows.append((lid, item, qual, price, p["stock"], now, "sold_out", "high", dadd))
             elif p["stock"] is not None and stock is not None and stock < p["stock"]:
-                fill_rows.append((lid, item, qual, price, p["stock"] - stock, now, "qty_drop", "high"))
+                fill_rows.append((lid, item, qual, price, p["stock"] - stock, now, "qty_drop", "high", dadd))
 
         state_rows.append((lid, item, l.get("operation"), l.get("title"), qual,
-                           price, stock, sold, neg, views, now, run_id))
+                           price, stock, sold, neg, views, now, run_id, dadd))
 
     # Disappearance -> 'expired': live in the prior run, absent now, and not already
     # sold out (those were captured as sold_out). Ambiguous sale-vs-expiry => low conf.
     expired = 0
     if prev_run_id is not None:
-        cur.execute("""SELECT listing_id, id_item, quality, last_price, last_in_stock
+        cur.execute("""SELECT listing_id, id_item, quality, last_price, last_in_stock, date_added
                        FROM listing_state
                        WHERE last_seen_run = %s AND last_is_sold_out = FALSE
                          AND COALESCE(last_in_stock,0) > 0""", (prev_run_id,))
-        for lid, item, qual, lprice, lstock in cur.fetchall():
+        for lid, item, qual, lprice, lstock, ldadd in cur.fetchall():
             if lid not in seen:
-                fill_rows.append((lid, item, qual, lprice, lstock, now, "expired", "low"))
+                fill_rows.append((lid, item, qual, lprice, lstock, now, "expired", "low", ldadd))
                 expired += 1
 
     if snap_rows:
@@ -192,18 +193,19 @@ def run_cycle(conn):
             total_negotiations,total_views,date_added,date_expiration) VALUES %s""", snap_rows)
     if fill_rows:
         execute_values(cur, """INSERT INTO fill_event (listing_id,id_item,quality,
-            fill_price,fill_qty,observed_at,signal_type,confidence) VALUES %s
+            fill_price,fill_qty,observed_at,signal_type,confidence,date_added) VALUES %s
             ON CONFLICT (listing_id,observed_at,signal_type) DO NOTHING""", fill_rows)
     if state_rows:
         execute_values(cur, """INSERT INTO listing_state (listing_id,id_item,operation,
             title,quality,last_price,last_in_stock,last_is_sold_out,last_negotiations,
-            last_views,last_seen_at,last_seen_run) VALUES %s
+            last_views,last_seen_at,last_seen_run,date_added) VALUES %s
             ON CONFLICT (listing_id) DO UPDATE SET
               id_item=EXCLUDED.id_item, operation=EXCLUDED.operation, title=EXCLUDED.title,
               quality=EXCLUDED.quality, last_price=EXCLUDED.last_price,
               last_in_stock=EXCLUDED.last_in_stock, last_is_sold_out=EXCLUDED.last_is_sold_out,
               last_negotiations=EXCLUDED.last_negotiations, last_views=EXCLUDED.last_views,
-              last_seen_at=EXCLUDED.last_seen_at, last_seen_run=EXCLUDED.last_seen_run""", state_rows)
+              last_seen_at=EXCLUDED.last_seen_at, last_seen_run=EXCLUDED.last_seen_run,
+              date_added=EXCLUDED.date_added""", state_rows)
 
     cur.execute("""UPDATE poll_run SET finished_at=now(), listings_seen=%s,
                    snapshots_written=%s, fills_detected=%s WHERE run_id=%s""",
