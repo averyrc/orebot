@@ -1,0 +1,27 @@
+name: poll
+on:
+  schedule:
+    # Every 25 min. GitHub may delay runs under load; the poller diffs against
+    # listing_state (not wall-clock), so irregular spacing degrades gracefully.
+    - cron: "*/25 * * * *"
+  workflow_dispatch: {}        # lets you trigger a run manually from the Actions tab
+
+# Don't let a slow run overlap the next scheduled one.
+concurrency:
+  group: poll
+  cancel-in-progress: false
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install psycopg2-binary
+      - run: python poller.py --once
+        env:
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          UEX_API_TOKEN: ${{ secrets.UEX_API_TOKEN }}

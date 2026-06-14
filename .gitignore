@@ -1,0 +1,6 @@
+# Never commit secrets — they live in GitHub repo secrets, not the repo.
+*.env
+.env
+orebot.env
+__pycache__/
+*.pyc
