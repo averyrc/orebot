@@ -87,9 +87,19 @@ def numeq(a, b):
         return a == b
 
 
+def is_ore(c):
+    """Identify minable ores (minerals + metals). UEX's boolean flags are unreliable
+    here — the actual tradeable entries have is_mineral/is_raw/is_refinable all = 0 —
+    so match on `kind` instead, tolerating its case/typo variants ('mineral','Minteral')
+    and the Metal/Non-Metal family. This is what aligns commodity.id_item with the
+    id_item on real marketplace listings."""
+    k = (c.get("kind") or "").strip().lower()
+    return "mineral" in k or "metal" in k or k == "minteral"
+
+
 def sync_commodities(cur):
     rows = api("commodities")
-    minerals = [c for c in rows if c.get("is_mineral") or c.get("is_raw") or c.get("is_refinable")]
+    minerals = [c for c in rows if is_ore(c)]
     execute_values(cur, """
         INSERT INTO commodity (id_commodity,id_parent,id_item,name,code,kind,
             is_mineral,is_raw,is_refined,is_refinable,is_harvestable,last_synced)
